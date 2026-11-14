@@ -1,0 +1,31 @@
+{
+  "name": "linkproof",
+  "version": "1.1.0",
+  "private": true,
+  "description": "LinkProof: x402 pay-per-call verification API + remote MCP server on Cloudflare Workers",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "sh build.sh testnet",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@coinbase/x402": "^2.1.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "@x402/core": "^2.31.0",
+    "@x402/evm": "^2.31.0",
+    "@x402/extensions": "^2.31.0",
+    "@x402/fetch": "^2.31.0",
+    "@x402/hono": "^2.31.0",
+    "agents": "^0.33.0",
+    "esbuild": "^0.28.2",
+    "hono": "^4.13.18",
+    "viem": "^2.57.19",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}
