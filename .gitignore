@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.dev.vars
+.env*
+*.key
+*.pem
+deploy.*.generated.js
+.wrangler/

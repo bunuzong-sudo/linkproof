@@ -1,0 +1,11 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "dev.workers.bsptimber.linkproof/linkproof",
+  "title": "LinkProof",
+  "description": "Pay-per-call (x402 USDC on Base) tools: verify URLs, verify citations, find Wayback archives.",
+  "version": "1.1.0",
+  "websiteUrl": "https://linkproof.bsptimber.workers.dev/",
+  "remotes": [
+    { "type": "streamable-http", "url": "https://linkproof.bsptimber.workers.dev/mcp" }
+  ]
+}

@@ -1,0 +1,15 @@
+name = "linkproof"
+main = "src/worker.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Testnet defaults (Base Sepolia, public x402.org facilitator). For mainnet set
+# NETWORK = "eip155:8453" and FACILITATOR_URL = "cdp", and add the secrets
+# CDP_API_KEY_ID / CDP_API_KEY_SECRET with `wrangler secret put` (never commit them).
+[vars]
+NETWORK = "eip155:84532"
+FACILITATOR_URL = "https://x402.org/facilitator"
+PAY_TO = "0xYourReceivingWallet"
+PRICE = "0.005"
+CONTACT_EMAIL = "you@example.com"
+PUBLIC_URL = "http://localhost:8787"
