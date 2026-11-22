@@ -94,9 +94,11 @@ export type SafeFetchResult = {
   body_bytes: number;
   truncated: boolean;
   method: string;
+  /** Raw (undecoded, capped) body bytes; only when opts.raw is set. */
+  raw?: Uint8Array;
 };
 
-export async function readCapped(res: Response, cap: number): Promise<{ text: string; bytes: number; truncated: boolean }> {
+export async function readCapped(res: Response, cap: number): Promise<{ text: string; bytes: number; truncated: boolean; buf?: Uint8Array }> {
   if (!res.body || cap <= 0) {
     try { await res.body?.cancel(); } catch {}
     return { text: "", bytes: 0, truncated: false };
@@ -121,12 +123,12 @@ export async function readCapped(res: Response, cap: number): Promise<{ text: st
     off += n;
     if (off >= buf.length) break;
   }
-  return { text: new TextDecoder("utf-8", { fatal: false }).decode(buf), bytes: total, truncated };
+  return { text: new TextDecoder("utf-8", { fatal: false }).decode(buf), bytes: total, truncated, buf };
 }
 
 export async function safeFetch(
   input: string,
-  opts: { method?: string; headers?: Record<string, string>; timeoutMs?: number; maxRedirects?: number; maxBytes?: number } = {},
+  opts: { method?: string; headers?: Record<string, string>; timeoutMs?: number; maxRedirects?: number; maxBytes?: number; raw?: boolean } = {},
 ): Promise<SafeFetchResult> {
   const method = (opts.method || "GET").toUpperCase();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -183,6 +185,7 @@ export async function safeFetch(
         body_bytes: body.bytes,
         truncated: body.truncated,
         method,
+        ...(opts.raw ? { raw: body.buf ?? new Uint8Array(0) } : {}),
       };
     }
     return { ...base, error: "too_many_redirects", redirect_chain: chain, url: current };
