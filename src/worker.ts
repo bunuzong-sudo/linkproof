@@ -5,7 +5,7 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 import { declareDiscoveryExtension, bazaarResourceServerExtension } from "@x402/extensions/bazaar";
 import { createFacilitatorConfig } from "@coinbase/x402";
 
-type Env = { GLAMA_CLAIM?: string; CDP_API_KEY_ID?: string; CDP_API_KEY_SECRET?: string; CONTACT_EMAIL: string; NETWORK: string; FACILITATOR_URL: string; PAY_TO: string; PRICE: string; PUBLIC_URL: string };
+type Env = { AI?: any; TEST_FREE?: string; GLAMA_CLAIM?: string; CDP_API_KEY_ID?: string; CDP_API_KEY_SECRET?: string; CONTACT_EMAIL: string; NETWORK: string; FACILITATOR_URL: string; PAY_TO: string; PRICE: string; PUBLIC_URL: string };
 
 /** Prefer the request host so docs, OpenAPI, discovery and error links match the URL the client used. Fallback is the canonical PUBLIC_URL. */
 function publicUrl(c: { req: { url: string }; env: Env }): string {
@@ -26,10 +26,13 @@ import { PRICE_INJECTION, parseInjectionInput, scanInjection, INJECTION_DISCLAIM
 import { MAX_WIKI_ITEMS, PRICE_WIKI, parseWikiItems, wikiSummaryMany, WIKI_LICENSE, WIKI_LICENSE_URL } from "./wiki";
 import { PRICE_LICENSE, parseLicenseInput, detectLicense, LICENSE_DISCLAIMER } from "./license";
 import { PRICE_ICS, parseIcsInput, parseIcs, MAX_OCCURRENCES } from "./ics";
+import { PRICE_READ_PAGE, DEFAULT_MAX_CHARS, MAX_CHARS_LIMIT, parseReadPageInput, readPage } from "./readpage";
+import { PRICE_DOMAIN_REPORT, parseDomainReportInput, domainReport } from "./domainreport";
+import { PRICE_BASE_LOOKUP, MAX_EXTRA_TOKENS, parseBaseLookupInput, baseLookup, defaultRpc } from "./baselookup";
 
 const PRICE_CITATIONS = "0.01";
 const PRICE_ARCHIVE = "0.005";
-const ua = (env: Env) => `LinkProof/1.4 (+${env.PUBLIC_URL}; mailto:${env.CONTACT_EMAIL})`;
+const ua = (env: Env) => `LinkProof/1.5 (+${env.PUBLIC_URL}; mailto:${env.CONTACT_EMAIL})`;
 
 const CITATION_ITEM = { anyOf: [
   { type: "string", minLength: 1, maxLength: 1000, description: "A DOI, arXiv id (e.g. arXiv:1706.03762), 'PMID: 123', or a free-text reference" },
@@ -109,17 +112,48 @@ const ANSWER_SCHEMA = { type: "object", properties: {
   citations: { type: "array", maxItems: MAX_ANSWER_CITATIONS, description: "Optional extra references, e.g. free-text references that cannot be auto-extracted", items: CITATION_ITEM },
   archive_dead_links: { type: "boolean", description: "Look up Wayback Machine copies for dead links (default true, max 5)" } } };
 
+// ---- v1.5 routes: read-page, domain-report, base-lookup ----
+const READ_EXAMPLE = { url: "https://example.com", max_chars: 20000, include_links: false };
+const READ_SCHEMA = { type: "object", properties: {
+  url: { type: "string", format: "uri", description: "Public http(s) page or PDF URL (a bare domain is also accepted)" },
+  max_chars: { type: "integer", minimum: 500, maximum: MAX_CHARS_LIMIT, description: `Max characters of Markdown to return (default ${DEFAULT_MAX_CHARS})` },
+  include_links: { type: "boolean", description: "Also return the list of links found in the content (default false)" },
+  ai_policy: { type: "boolean", description: "Check robots.txt / meta / X-Robots-Tag for AI-usage signals (default true)" } }, required: ["url"] };
+const READ_OUT = { url: "https://example.com", final_url: "https://example.com/", status: 200, content_type: "text/html", source: "html", title: "Example Domain", description: null, lang: "en",
+  format: "markdown", content: "# Example Domain\n\nThis domain is for use in documentation examples without needing permission.", content_chars: 96, total_chars: 96, truncated: false, word_count: 14, links_found: 1,
+  ai_usage: { verdict: "unknown", summary: "No robots.txt found (or it could not be read) and no meta/header restriction; no machine-readable AI policy.", robots_txt: { present: false, status: 404, generic_allowed: null, ai_crawlers_blocked: [], ai_crawlers_allowed: 0, content_signal: null }, meta_robots: null, x_robots_tag: null, signals: [] } };
+const DOMAIN_EXAMPLE = { domain: "example.com" };
+const DOMAIN_SCHEMA = { type: "object", properties: { domain: { type: "string", description: "Domain, URL or email address (only the domain is used)" } }, required: ["domain"] };
+const DOMAIN_OUT = { domain: "example.com", summary: { health_score: 95, grade: "A", risk: "low", findings: [{ severity: "low", message: "Weak HTTP security headers (grade F)." }] },
+  dns: { resolves: true, a: ["104.20.23.154"], aaaa: ["2606:4700:10::6814:179a"], ns: ["hera.ns.cloudflare.com"], caa: [], dnssec_validated: true },
+  registration: { found: true, registered: "1995-08-14T04:00:00Z", expires: "2027-08-13T04:00:00Z", age_days: 11423, expires_in_days: 263, registrar: "RESERVED-Internet Assigned Numbers Authority", status: ["client delete prohibited"] },
+  tls_certificate: { found: true, unexpired_count: 7, latest: { issuer: "SSL.com", not_after: "2026-12-25T22:56:35Z", days_left: 33 } },
+  https: { reachable: true, status: 200, headers_grade: "F", hsts: false }, email: { mx: true, spf: true, dmarc: true, dmarc_policy: "reject", grade: "A" },
+  policies: { robots_txt: { present: false }, security_txt: { present: false }, llms_txt: { present: false } } };
+const BASE_EXAMPLE = { address: "jesse.base.eth" };
+const BASE_SCHEMA = { type: "object", properties: {
+  address: { type: "string", description: "Wallet 0x address or Basename (name.base.eth) whose balances to read" },
+  tokens: { type: "array", maxItems: MAX_EXTRA_TOKENS, items: { type: "string" }, description: "Extra ERC-20 token addresses to include in the wallet balances" },
+  token: { type: "string", description: "ERC-20 contract address to describe (name, symbol, decimals, total supply)" } },
+  description: "All fields optional; an empty body returns chain status (latest block, gas)." };
+const BASE_OUT = { chain: { chain_id: 8453, name: "Base", block_number: 60730253, block_time: "2026-11-22T08:33:46.000Z", base_fee_gwei: 0.005, gas_price_gwei: 0.006, priority_fee_gwei: 0.001, est_cost_eth: { eth_transfer: "0.000000126", erc20_transfer: "0.00000039" } },
+  wallet: { address: "0x2211d1D0020DAEA8039E46Cf1367962070d77DA9", resolved_from_basename: "jesse.base.eth", primary_basename: "jesse.base.eth", is_contract: true, tx_count: 1, eth: "7.5452",
+    tokens: [{ symbol: "USDC", address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6, balance: "2861.469479", balance_raw: "2861469479" }] }, rpc_provider: "base-rpc.publicnode.com" };
+
 const app = new Hono<{ Bindings: Env }>();
 
 function docs(env: Env, origin: string) {
   return {
     service: "LinkProof",
     contact: { email: env.CONTACT_EMAIL },
-    summary: "Fact-checking and web-verification tools for AI agents, paid per call with x402 (USDC on Base, no API key, no account): hallucination check for a whole AI answer (links + citations in one call), broken link / dead link checker, citation checker (DOI, arXiv, PubMed), Wayback Machine lookup, HTTP security headers audit, robots.txt / llms.txt / security.txt checker, SPF / DKIM / DMARC checker, prompt injection detection, Wikipedia summaries, open source license (SPDX) detection and ICS calendar parsing.",
+    summary: "Fact-checking, web and on-chain lookup tools for AI agents, paid per call with x402 (USDC on Base, no API key, no account): hallucination check for a whole AI answer (links + citations in one call), web page / PDF to Markdown reader, domain health report (DNS, WHOIS/RDAP, SSL, SPF/DMARC), Base wallet / token / gas lookup, broken link / dead link checker, citation checker (DOI, arXiv, PubMed), Wayback Machine lookup, HTTP security headers audit, robots.txt / llms.txt / security.txt checker, SPF / DKIM / DMARC checker, prompt injection detection, Wikipedia summaries, open source license (SPDX) detection and ICS calendar parsing.",
     endpoint: { method: "POST", path: "/v1/verify-links", url: `${origin}/v1/verify-links` },
     price: `${env.PRICE} USDC per call (up to ${MAX_URLS} URLs), paid via x402`,
     endpoints: [
       { method: "POST", path: "/v1/verify-answer", price_usdc: PRICE_ANSWER, does: META["/v1/verify-answer"].short + `. Up to ${MAX_ANSWER_LINKS} links and ${MAX_ANSWER_CITATIONS} citations; text up to ${MAX_ANSWER_CHARS} chars`, request_example: ANSWER_EXAMPLE },
+      { method: "POST", path: "/v1/read-page", price_usdc: PRICE_READ_PAGE, does: META["/v1/read-page"].short, request_example: READ_EXAMPLE },
+      { method: "POST", path: "/v1/domain-report", price_usdc: PRICE_DOMAIN_REPORT, does: META["/v1/domain-report"].short, request_example: DOMAIN_EXAMPLE },
+      { method: "POST", path: "/v1/base-lookup", price_usdc: PRICE_BASE_LOOKUP, does: META["/v1/base-lookup"].short, request_example: BASE_EXAMPLE },
       { method: "POST", path: "/v1/verify-links", price_usdc: env.PRICE, does: `Check up to ${MAX_URLS} URLs: live/dead, soft-404, parked, final URL, title, optional expected phrase` },
       { method: "POST", path: "/v1/verify-citations", price_usdc: PRICE_CITATIONS, does: `Verify up to ${MAX_CITATIONS} citations (DOI, arXiv, PubMed, or free text) exist and match claimed title/authors/year. Verdicts: verified, mismatch, not_found, error`, request_example: CITATIONS_EXAMPLE },
       { method: "POST", path: "/v1/find-archive", price_usdc: PRICE_ARCHIVE, does: `Find the closest Wayback Machine snapshot for up to ${MAX_ARCHIVE_URLS} URLs, optionally near a date`, request_example: ARCHIVE_EXAMPLE },
@@ -131,8 +165,8 @@ function docs(env: Env, origin: string) {
       { method: "POST", path: "/v1/license-detect", price_usdc: PRICE_LICENSE, does: "Identify a common SPDX license (MIT, Apache-2.0, GPL, LGPL, AGPL, BSD, MPL-2.0, ISC, Unlicense, CC0, …) from license text or a public LICENSE file URL. Returns confidence and key permissions/conditions. Not legal advice", request_example: LICENSE_EXAMPLE },
       { method: "POST", path: "/v1/ics-parse", price_usdc: PRICE_ICS, does: `Parse iCalendar (ICS) text or a public .ics URL. Returns VEVENTs (summary, start/end in UTC/ISO, location) with RRULE expanded to at most ${MAX_OCCURRENCES} occurrences in a bounded window. Data is not stored`, request_example: ICS_EXAMPLE },
     ],
-    mcp: { url: `${origin}/mcp`, transport: "streamable-http", tools: ["verify_answer", "verify_links", "verify_citations", "find_archive", "check_headers", "site_policies", "email_auth", "injection_scan", "wiki_summary", "license_detect", "ics_parse"], payment: "x402 per tool call (same prices); tools/list is free" },
-    data_sources: "Crossref, DataCite, arXiv, NCBI PubMed E-utilities, Internet Archive Wayback Machine, Cloudflare/Google DNS-over-HTTPS, Wikimedia REST API (public APIs, polite User-Agent with contact). License detection uses bundled SPDX fingerprints; injection scan is local and stores nothing.",
+    mcp: { url: `${origin}/mcp`, transport: "streamable-http", tools: ["verify_answer", "read_page", "domain_report", "base_lookup", "verify_links", "verify_citations", "find_archive", "check_headers", "site_policies", "email_auth", "injection_scan", "wiki_summary", "license_detect", "ics_parse"], payment: "x402 per tool call (same prices); tools/list is free" },
+    data_sources: "Target web pages (read-page; PDFs converted with Cloudflare Workers AI toMarkdown), IANA RDAP registries, SSLMate Cert Spotter (Certificate Transparency), Base public JSON-RPC (PublicNode, Base, dRPC), Crossref, DataCite, arXiv, NCBI PubMed E-utilities, Internet Archive Wayback Machine, Cloudflare/Google DNS-over-HTTPS, Wikimedia REST API (public APIs, polite User-Agent with contact). License detection uses bundled SPDX fingerprints; injection scan is local and stores nothing.",
     network: env.NETWORK,
     payTo: env.PAY_TO,
     request_example: { urls: ["https://example.com", { url: "https://en.wikipedia.org/wiki/HTTP_402", expect: "Payment Required" }] },
@@ -145,6 +179,11 @@ function docs(env: Env, origin: string) {
   };
 }
 
+app.onError((err, c) => {
+  const msg = String((err as any)?.message || err).slice(0, 200);
+  console.error("unhandled", c.req.method, new URL(c.req.url).pathname, msg);
+  return c.json({ error: "Internal error; not charged.", detail: msg, ...(c.env.NETWORK === "eip155:84532" ? { stack: String((err as any)?.stack || "").slice(0, 1500) } : {}) }, 500);
+});
 app.get("/", (c) => c.json(docs(c.env, publicUrl(c))));
 // Public key proving domain control for the official MCP Registry (HTTP auth). Public value, not a secret.
 app.get("/.well-known/mcp-registry-auth", (c) => c.text('v=MCPv1; k=ed25519; p=EWZ2lBxSijXKjr4410MY8jWJMsiyvE+d+Ew22UDBaZ0='));
@@ -155,13 +194,61 @@ app.get("/openapi.json", (c) => {
     openapi: "3.1.0",
     info: {
       title: "LinkProof",
-      version: "1.4.0",
+      version: "1.5.0",
       contact: { name: "LinkProof", email: env.CONTACT_EMAIL },
-      description: "Fact-checking and web-verification tools for AI agents, paid per call with x402 (USDC on Base, no API key, no account): hallucination check for a whole AI answer (links + citations in one call), broken link / dead link checker, citation checker (DOI, arXiv, PubMed), Wayback Machine lookup, HTTP security headers audit, robots.txt / llms.txt / security.txt checker, SPF / DKIM / DMARC checker, prompt injection detection, Wikipedia summaries, open source license (SPDX) detection and ICS calendar parsing.",
-      "x-guidance": "To fact-check a whole AI answer in one call, POST /v1/verify-answer with {text: \"...\"} and read summary.overall (all_ok | problems_found | partial), links[].verdict and citations[].verdict. POST /v1/verify-links with JSON {urls: [...]} (1-10 items). Each item is a URL string or {url, expect}. Read results[].verdict: live | live_but_text_not_found | soft_404 | parked | dead | blocked_or_rate_limited | unreachable. POST /v1/verify-citations with {citations: [...]} (1-10; DOI, arXiv id, PMID, free-text reference, or {doi|arxiv|pmid|title, authors, year}); read results[].verdict: verified | mismatch | not_found | error. POST /v1/find-archive with {urls: [...], date?: YYYY-MM-DD} to get the closest Wayback snapshot per URL. POST /v1/check-headers with {urls: [...]} (1-5) for security-header grades. POST /v1/site-policies with {urls: [...], path?: /} (1-5) for robots.txt, llms.txt, ai.txt and security.txt. POST /v1/email-auth with {domains: [...]} (1-5) for SPF/DMARC/MX/DKIM DNS records (mailboxes are never probed). POST /v1/injection-scan with {text: ...} (max 50 KB) for prompt-injection patterns. POST /v1/wiki-summary with {title|query, lang?} (CC BY-SA 4.0). POST /v1/license-detect with {text|url} for an SPDX id (not legal advice). POST /v1/ics-parse with {ics|url} to parse VEVENTs. Pay per call with x402 (USDC on Base).",
+      description: "Fact-checking, web and on-chain lookup tools for AI agents, paid per call with x402 (USDC on Base, no API key, no account): hallucination check for a whole AI answer (links + citations in one call), web page / PDF to Markdown reader, domain health report (DNS, WHOIS/RDAP, SSL, SPF/DMARC), Base wallet / token / gas lookup, broken link / dead link checker, citation checker (DOI, arXiv, PubMed), Wayback Machine lookup, HTTP security headers audit, robots.txt / llms.txt / security.txt checker, SPF / DKIM / DMARC checker, prompt injection detection, Wikipedia summaries, open source license (SPDX) detection and ICS calendar parsing.",
+      "x-guidance": "POST /v1/read-page with {url} to get a web page or PDF as clean Markdown (content, title, ai_usage.verdict). POST /v1/domain-report with {domain} for DNS, RDAP age/expiry, SSL certificate, headers, SPF/DMARC and summary.health_score. POST /v1/base-lookup with {address: 0x... or name.base.eth} for Base wallet balances, {token: 0x...} for ERC-20 info, or {} for latest block and gas. To fact-check a whole AI answer in one call, POST /v1/verify-answer with {text: \"...\"} and read summary.overall (all_ok | problems_found | partial), links[].verdict and citations[].verdict. POST /v1/verify-links with JSON {urls: [...]} (1-10 items). Each item is a URL string or {url, expect}. Read results[].verdict: live | live_but_text_not_found | soft_404 | parked | dead | blocked_or_rate_limited | unreachable. POST /v1/verify-citations with {citations: [...]} (1-10; DOI, arXiv id, PMID, free-text reference, or {doi|arxiv|pmid|title, authors, year}); read results[].verdict: verified | mismatch | not_found | error. POST /v1/find-archive with {urls: [...], date?: YYYY-MM-DD} to get the closest Wayback snapshot per URL. POST /v1/check-headers with {urls: [...]} (1-5) for security-header grades. POST /v1/site-policies with {urls: [...], path?: /} (1-5) for robots.txt, llms.txt, ai.txt and security.txt. POST /v1/email-auth with {domains: [...]} (1-5) for SPF/DMARC/MX/DKIM DNS records (mailboxes are never probed). POST /v1/injection-scan with {text: ...} (max 50 KB) for prompt-injection patterns. POST /v1/wiki-summary with {title|query, lang?} (CC BY-SA 4.0). POST /v1/license-detect with {text|url} for an SPDX id (not legal advice). POST /v1/ics-parse with {ics|url} to parse VEVENTs. Pay per call with x402 (USDC on Base).",
     },
     servers: [{ url: publicUrl(c) }],
     paths: {
+      "/v1/read-page": {
+        post: {
+          operationId: "readPage",
+          summary: META["/v1/read-page"].short,
+          description: META["/v1/read-page"].description,
+          tags: ["Web", "Scraping"],
+          "x-payment-info": { price: { mode: "fixed", currency: "USD", amount: Number(PRICE_READ_PAGE).toFixed(6) }, protocols: [{ x402: {} }] },
+          requestBody: { required: true, content: { "application/json": { schema: READ_SCHEMA, example: READ_EXAMPLE } } },
+          responses: {
+            "200": { description: "Clean Markdown of the page plus metadata and AI-usage hint", content: { "application/json": { schema: { type: "object" }, example: READ_OUT } } },
+            "400": { description: "Invalid input (not charged)" },
+            "402": { description: "Payment Required" },
+            "502": { description: "Upstream fetch/lookup failed (not charged)" },
+          },
+        },
+      },
+      "/v1/domain-report": {
+        post: {
+          operationId: "domainReport",
+          summary: META["/v1/domain-report"].short,
+          description: META["/v1/domain-report"].description,
+          tags: ["Web", "Security", "DNS"],
+          "x-payment-info": { price: { mode: "fixed", currency: "USD", amount: Number(PRICE_DOMAIN_REPORT).toFixed(6) }, protocols: [{ x402: {} }] },
+          requestBody: { required: true, content: { "application/json": { schema: DOMAIN_SCHEMA, example: DOMAIN_EXAMPLE } } },
+          responses: {
+            "200": { description: "Health score, findings and per-check details", content: { "application/json": { schema: { type: "object" }, example: DOMAIN_OUT } } },
+            "400": { description: "Invalid input (not charged)" },
+            "402": { description: "Payment Required" },
+            "502": { description: "Upstream fetch/lookup failed (not charged)" },
+          },
+        },
+      },
+      "/v1/base-lookup": {
+        post: {
+          operationId: "baseLookup",
+          summary: META["/v1/base-lookup"].short,
+          description: META["/v1/base-lookup"].description,
+          tags: ["Crypto", "Base", "Onchain"],
+          "x-payment-info": { price: { mode: "fixed", currency: "USD", amount: Number(PRICE_BASE_LOOKUP).toFixed(6) }, protocols: [{ x402: {} }] },
+          requestBody: { required: true, content: { "application/json": { schema: BASE_SCHEMA, example: BASE_EXAMPLE } } },
+          responses: {
+            "200": { description: "Chain status plus wallet and/or token details", content: { "application/json": { schema: { type: "object" }, example: BASE_OUT } } },
+            "400": { description: "Invalid input (not charged)" },
+            "402": { description: "Payment Required" },
+            "502": { description: "Upstream fetch/lookup failed (not charged)" },
+          },
+        },
+      },
       "/v1/verify-answer": {
         post: {
           operationId: "verifyAnswer",
@@ -356,20 +443,21 @@ const PRICES: Record<string, string> = {
   "/v1/verify-answer": PRICE_ANSWER, "/v1/verify-citations": PRICE_CITATIONS, "/v1/find-archive": PRICE_ARCHIVE,
   "/v1/check-headers": PRICE_HEADERS, "/v1/site-policies": PRICE_POLICIES, "/v1/email-auth": PRICE_EMAIL_AUTH, "/v1/injection-scan": PRICE_INJECTION,
   "/v1/wiki-summary": PRICE_WIKI, "/v1/license-detect": PRICE_LICENSE, "/v1/ics-parse": PRICE_ICS,
+  "/v1/read-page": PRICE_READ_PAGE, "/v1/domain-report": PRICE_DOMAIN_REPORT, "/v1/base-lookup": PRICE_BASE_LOOKUP,
 };
 const priceOf = (env: Env, path: string) => PRICES[path] ?? env.PRICE;
-const VERSION = "1.4.0";
+const VERSION = "1.5.0";
 const REGISTRY_NAME = "dev.workers.bsptimber.linkproof/linkproof";
-const CARD_DESCRIPTION = "Pay-per-call fact-checking for AI agents: links, citations, archives, headers, SPF/DMARC, injection.";
+const CARD_DESCRIPTION = "Pay-per-call AI agent tools: fact-check, web page to Markdown, domain report, Base wallet lookup.";
 
 function llmsTxt(env: Env) {
   const o = env.PUBLIC_URL;
   const lines = [
     "# LinkProof",
     "",
-    "> Fact-checking and web-verification tools for AI agents, paid per call with x402 (USDC on Base). No API key, no account, no subscription. An unpaid request returns HTTP 402 with the payment requirements; any x402 client (e.g. @x402/fetch, Coinbase AgentKit) pays and retries automatically. Invalid input is rejected with 400 and never charged; payment settles only after a successful result.",
+    "> Fact-checking, web reading, domain and Base on-chain lookup tools for AI agents, paid per call with x402 (USDC on Base). No API key, no account, no subscription. An unpaid request returns HTTP 402 with the payment requirements; any x402 client (e.g. @x402/fetch, Coinbase AgentKit) pays and retries automatically. Invalid input is rejected with 400 and never charged; payment settles only after a successful result.",
     "",
-    "Use LinkProof when an agent needs to: check an AI answer for hallucinated links or citations, check for broken or dead links, verify DOIs / arXiv / PubMed references, find a Wayback Machine copy of a dead page, audit a site's HTTP security headers, read robots.txt / llms.txt / security.txt, check a domain's SPF / DKIM / DMARC, detect prompt injection in untrusted text, get a Wikipedia summary, identify an open source license, or parse an ICS calendar.",
+    "Use LinkProof when an agent needs to: read a web page or PDF as clean Markdown (with an AI-usage hint), get a domain health / trust report (DNS, WHOIS age, SSL expiry, SPF/DMARC), look up a Base wallet's balances, a Basename, an ERC-20 token or current gas, check an AI answer for hallucinated links or citations, check for broken or dead links, verify DOIs / arXiv / PubMed references, find a Wayback Machine copy of a dead page, audit a site's HTTP security headers, read robots.txt / llms.txt / security.txt, check a domain's SPF / DKIM / DMARC, detect prompt injection in untrusted text, get a Wikipedia summary, identify an open source license, or parse an ICS calendar.",
     "",
     "## Paid endpoints (POST, JSON body)",
     "",
@@ -441,7 +529,15 @@ for (const p of ["/.well-known/glama.json", "/mcp/.well-known/glama.json"]) {
   app.get(p, (c) => c.env.GLAMA_CLAIM ? c.json({ $schema: "https://glama.ai/mcp/schemas/connector.json", claim: c.env.GLAMA_CLAIM }) : c.json({ error: "not configured" }, 404));
 }
 app.get("/health", (c) => c.json({ ok: true }));
-app.get("/.well-known/x402", (c) => { const o = publicUrl(c); return c.json({ x402Version: 2, resources: [`${o}/v1/verify-answer`, `${o}/v1/verify-links`, `${o}/v1/verify-citations`, `${o}/v1/find-archive`, `${o}/v1/check-headers`, `${o}/v1/site-policies`, `${o}/v1/email-auth`, `${o}/v1/injection-scan`, `${o}/v1/wiki-summary`, `${o}/v1/license-detect`, `${o}/v1/ics-parse`] }); });
+// Testnet-only diagnostics (TEST_FREE + Base Sepolia): which public Base RPCs answer from Workers egress.
+app.get("/debug/rpc-probe", async (c) => {
+  if (!(c.env.TEST_FREE === "1" && c.env.NETWORK === "eip155:84532")) return c.json({ error: "not found" }, 404);
+  const urls = (c.req.query("u") || "").split(",").filter(Boolean);
+  const body = JSON.stringify([{ jsonrpc: "2.0", id: 0, method: "eth_chainId", params: [] }, { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }, { jsonrpc: "2.0", id: 2, method: "eth_gasPrice", params: [] }, { jsonrpc: "2.0", id: 3, method: "eth_getBalance", params: ["0x206c257134049b8A52Ae7aaB0bd419Da38502733", "latest"] }, { jsonrpc: "2.0", id: 4, method: "eth_getCode", params: ["0x206c257134049b8A52Ae7aaB0bd419Da38502733", "latest"] }, { jsonrpc: "2.0", id: 5, method: "eth_maxPriorityFeePerGas", params: [] }]);
+  const out = await Promise.all(urls.map(async (u) => { const t = Date.now(); try { const r = await fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(5000) }); return [u, r.status, Date.now() - t, (await r.text()).slice(0, 90)]; } catch (e: any) { return [u, "ERR", Date.now() - t, String(e).slice(0, 60)]; } }));
+  return c.json(out);
+});
+app.get("/.well-known/x402", (c) => { const o = publicUrl(c); return c.json({ x402Version: 2, resources: [`${o}/v1/verify-answer`, `${o}/v1/read-page`, `${o}/v1/domain-report`, `${o}/v1/base-lookup`, `${o}/v1/verify-links`, `${o}/v1/verify-citations`, `${o}/v1/find-archive`, `${o}/v1/check-headers`, `${o}/v1/site-policies`, `${o}/v1/email-auth`, `${o}/v1/injection-scan`, `${o}/v1/wiki-summary`, `${o}/v1/license-detect`, `${o}/v1/ics-parse`] }); });
 
 // Validate input BEFORE settlement so buyers never pay for a malformed request.
 // Requests without a payment header always get the 402 challenge (so discovery probes work).
@@ -476,9 +572,24 @@ app.post("/v1/injection-scan", prevalidate(parseInjectionInput));
 app.post("/v1/wiki-summary", prevalidate(parseWikiItems));
 app.post("/v1/license-detect", prevalidate(parseLicenseInput));
 app.post("/v1/ics-parse", prevalidate(parseIcsInput));
+app.post("/v1/read-page", prevalidate(parseReadPageInput));
+app.post("/v1/domain-report", prevalidate(parseDomainReportInput));
+app.post("/v1/base-lookup", async (c: any, next: any) => {
+  // Empty body is valid here (chain status only), so parse leniently.
+  const paying = c.req.header("payment-signature") || c.req.header("x-payment");
+  if (!paying) return next();
+  const txt = await c.req.text();
+  let body: any = {};
+  if (txt.trim()) { try { body = JSON.parse(txt); } catch { return c.json({ error: "Body must be valid JSON", docs: publicUrl(c) }, 400); } }
+  const { error } = parseBaseLookupInput(body);
+  if (error) return c.json({ error, docs: publicUrl(c) }, 400);
+  return next();
+});
 
 let mw: any;
 app.use("/v1/*", async (c, next) => {
+  // Testnet-only functional testing without test USDC: never active on mainnet (double-guarded by network).
+  if (c.env.TEST_FREE === "1" && c.env.NETWORK === "eip155:84532" && c.req.header("x-test-free") === "1") return next();
   if (!mw) {
     const env = c.env;
     // Mainnet: Coinbase CDP facilitator (authenticated with Worker secrets) so settled payments get cataloged in the CDP Bazaar.
@@ -505,6 +616,54 @@ app.use("/v1/*", async (c, next) => {
               input: ANSWER_EXAMPLE,
               inputSchema: ANSWER_SCHEMA,
               output: { example: ANSWER_OUT },
+            } as any),
+          },
+        },
+        "POST /v1/read-page": {
+          accepts: [{ scheme: "exact", price: `$${PRICE_READ_PAGE}`, network: env.NETWORK as any, payTo: env.PAY_TO }],
+          description: META["/v1/read-page"].description,
+          mimeType: "application/json",
+          serviceName: "LinkProof",
+          tags: META["/v1/read-page"].tags,
+          extensions: {
+            ...declareDiscoveryExtension({
+              bodyType: "json",
+              method: "POST",
+              input: READ_EXAMPLE,
+              inputSchema: READ_SCHEMA,
+              output: { example: READ_OUT },
+            } as any),
+          },
+        },
+        "POST /v1/domain-report": {
+          accepts: [{ scheme: "exact", price: `$${PRICE_DOMAIN_REPORT}`, network: env.NETWORK as any, payTo: env.PAY_TO }],
+          description: META["/v1/domain-report"].description,
+          mimeType: "application/json",
+          serviceName: "LinkProof",
+          tags: META["/v1/domain-report"].tags,
+          extensions: {
+            ...declareDiscoveryExtension({
+              bodyType: "json",
+              method: "POST",
+              input: DOMAIN_EXAMPLE,
+              inputSchema: DOMAIN_SCHEMA,
+              output: { example: DOMAIN_OUT },
+            } as any),
+          },
+        },
+        "POST /v1/base-lookup": {
+          accepts: [{ scheme: "exact", price: `$${PRICE_BASE_LOOKUP}`, network: env.NETWORK as any, payTo: env.PAY_TO }],
+          description: META["/v1/base-lookup"].description,
+          mimeType: "application/json",
+          serviceName: "LinkProof",
+          tags: META["/v1/base-lookup"].tags,
+          extensions: {
+            ...declareDiscoveryExtension({
+              bodyType: "json",
+              method: "POST",
+              input: BASE_EXAMPLE,
+              inputSchema: BASE_SCHEMA,
+              output: { example: BASE_OUT },
             } as any),
           },
         },
@@ -836,6 +995,35 @@ app.post("/v1/ics-parse", async (c) => {
     return c.json({ error: "Calendar fetch failed; not charged. Retry later.", ...result }, 503);
   }
   return c.json(result);
+});
+
+app.post("/v1/read-page", async (c) => {
+  const { item, error } = parseReadPageInput(await c.req.json().catch(() => null));
+  if (error) return c.json({ error, docs: publicUrl(c) }, 400);
+  const r = await readPage(item!, ua(c.env), c.env.AI ?? null);
+  return c.json(r.body, r.status as any);
+});
+
+app.post("/v1/domain-report", async (c) => {
+  const { item, error } = parseDomainReportInput(await c.req.json().catch(() => null));
+  if (error) return c.json({ error, docs: publicUrl(c) }, 400);
+  const out: any = await domainReport(item!.domain, ua(c.env));
+  if (out.dns?.error && out.registration?.found == null && out.https?.status == null) return c.json({ error: "DNS and registry lookups failed; not charged. Retry later.", ...out }, 503);
+  return c.json(out);
+});
+
+app.post("/v1/base-lookup", async (c) => {
+  const txt = await c.req.text();
+  let body: any = {};
+  try { body = txt.trim() ? JSON.parse(txt) : {}; } catch { return c.json({ error: "Body must be valid JSON", docs: publicUrl(c) }, 400); }
+  const { item, error } = parseBaseLookupInput(body);
+  if (error) return c.json({ error, docs: publicUrl(c) }, 400);
+  try {
+    const r = await baseLookup(item!, defaultRpc(ua(c.env)));
+    return c.json(r.body, r.status as any);
+  } catch (e: any) {
+    return c.json({ error: "Base RPC providers unavailable; not charged. Retry later.", detail: String(e?.message || e).slice(0, 200) }, 503);
+  }
 });
 
 export default {

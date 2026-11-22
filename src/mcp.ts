@@ -7,7 +7,7 @@ import { z } from "zod";
 import { MAX_URLS, parseItems, check } from "./linkcheck";
 import { MAX_CITATIONS, parseCitations, verifyCitation, mapLimit } from "./citations";
 import { MAX_ARCHIVE_URLS, parseArchive, findArchive } from "./archive";
-import { META } from "./catalog";
+import { META, withPrice } from "./catalog";
 import { PRICE_ANSWER, MAX_ANSWER_CHARS, MAX_ANSWER_LINKS, MAX_ANSWER_CITATIONS, parseAnswerInput, verifyAnswer } from "./answer";
 import { MAX_HEADER_URLS, PRICE_HEADERS, parseHeaderItems, checkHeadersMany } from "./headers";
 import { MAX_POLICY_URLS, PRICE_POLICIES, parsePolicyItems, checkPoliciesMany } from "./policies";
@@ -16,19 +16,22 @@ import { PRICE_INJECTION, parseInjectionInput, scanInjection, INJECTION_DISCLAIM
 import { MAX_WIKI_ITEMS, PRICE_WIKI, parseWikiItems, wikiSummaryMany, WIKI_LICENSE, WIKI_LICENSE_URL } from "./wiki";
 import { PRICE_LICENSE, parseLicenseInput, detectLicense, LICENSE_DISCLAIMER } from "./license";
 import { PRICE_ICS, parseIcsInput, parseIcs, MAX_OCCURRENCES } from "./ics";
+import { PRICE_READ_PAGE, MAX_CHARS_LIMIT, parseReadPageInput, readPage } from "./readpage";
+import { PRICE_DOMAIN_REPORT, parseDomainReportInput, domainReport } from "./domainreport";
+import { PRICE_BASE_LOOKUP, MAX_EXTRA_TOKENS, parseBaseLookupInput, baseLookup, defaultRpc } from "./baselookup";
 
-type Env = { CDP_API_KEY_ID?: string; CDP_API_KEY_SECRET?: string; CONTACT_EMAIL: string; NETWORK: string; FACILITATOR_URL: string; PAY_TO: string; PRICE: string; PUBLIC_URL: string };
+type Env = { AI?: any; CDP_API_KEY_ID?: string; CDP_API_KEY_SECRET?: string; CONTACT_EMAIL: string; NETWORK: string; FACILITATOR_URL: string; PAY_TO: string; PRICE: string; PUBLIC_URL: string };
 
 const text = (obj: unknown, isError = false) => ({ ...(isError ? { isError: true } : {}), content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] });
 
 function createServer(env: Env) {
-  const ua = `LinkProof/1.4 (+${env.PUBLIC_URL}; mailto:${env.CONTACT_EMAIL})`;
+  const ua = `LinkProof/1.5 (+${env.PUBLIC_URL}; mailto:${env.CONTACT_EMAIL})`;
   const useCdp = env.FACILITATOR_URL === "cdp";
   if (useCdp && !(env.CDP_API_KEY_ID && env.CDP_API_KEY_SECRET)) throw new Error("CDP facilitator selected but secrets missing");
   const server = withX402(
     new McpServer(
-      { name: "LinkProof", version: "1.4.0" },
-      { instructions: "LinkProof fact-checking and verification tools for AI agents (fact-check a whole AI answer in one call with verify_answer; URLs, citations, archives, security headers, site policy files, email authentication DNS, prompt-injection scanning, Wikipedia summaries, SPDX license detection, ICS calendar parsing). Each tool is paid per call with x402 (USDC on Base); an unpaid call returns the x402 payment requirements. Invalid input is never charged; payment settles only after a successful result." },
+      { name: "LinkProof", version: "1.5.0" },
+      { instructions: "LinkProof fact-checking, web and on-chain lookup tools for AI agents (fact-check a whole AI answer in one call with verify_answer; read_page turns a web page or PDF into clean Markdown with an AI-usage hint; domain_report gives DNS, WHOIS/RDAP age, SSL, headers and SPF/DMARC with a health score; base_lookup reads Base wallet balances, Basenames, ERC-20 info and gas; URLs, citations, archives, security headers, site policy files, email authentication DNS, prompt-injection scanning, Wikipedia summaries, SPDX license detection, ICS calendar parsing). Each tool is paid per call with x402 (USDC on Base); an unpaid call returns the x402 payment requirements. Invalid input is never charged; payment settles only after a successful result." },
     ),
     {
       network: env.NETWORK,
@@ -39,7 +42,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "verify_answer",
-    `${META["/v1/verify-answer"].description} Price: ${PRICE_ANSWER} USDC per call (x402, Base).`,
+    withPrice(META["/v1/verify-answer"].description, PRICE_ANSWER),
     Number(PRICE_ANSWER),
     {
       text: z.string().max(MAX_ANSWER_CHARS).optional().describe("The AI answer or document to fact-check; URLs, DOIs, arXiv ids and PubMed ids are extracted automatically"),
@@ -60,8 +63,64 @@ function createServer(env: Env) {
   );
 
   server.paidTool(
+    "read_page",
+    withPrice(META["/v1/read-page"].description, PRICE_READ_PAGE),
+    Number(PRICE_READ_PAGE),
+    {
+      url: z.string().describe("Public http(s) page or PDF URL"),
+      max_chars: z.number().int().min(500).max(MAX_CHARS_LIMIT).optional().describe("Max Markdown characters to return (default 20000)"),
+      include_links: z.boolean().optional().describe("Also return links found in the content"),
+      ai_policy: z.boolean().optional().describe("Check robots.txt / meta / X-Robots-Tag AI-usage signals (default true)"),
+    },
+    { readOnlyHint: true, openWorldHint: true, title: "Read a web page or PDF as Markdown" },
+    async (args: any) => {
+      const { item, error } = parseReadPageInput(args);
+      if (error) return text({ error }, true);
+      const r = await readPage(item!, ua, env.AI ?? null);
+      return text(r.body, r.status >= 400);
+    },
+  );
+
+  server.paidTool(
+    "domain_report",
+    withPrice(META["/v1/domain-report"].description, PRICE_DOMAIN_REPORT),
+    Number(PRICE_DOMAIN_REPORT),
+    { domain: z.string().describe("Domain, URL or email address (only the domain is used)") },
+    { readOnlyHint: true, openWorldHint: true, title: "Domain health and trust report" },
+    async (args: any) => {
+      const { item, error } = parseDomainReportInput(args);
+      if (error) return text({ error }, true);
+      const out: any = await domainReport(item!.domain, ua);
+      if (out.dns?.error && out.registration?.found == null && out.https?.status == null) return text({ error: "DNS and registry lookups failed; not charged. Retry later.", ...out }, true);
+      return text(out);
+    },
+  );
+
+  server.paidTool(
+    "base_lookup",
+    withPrice(META["/v1/base-lookup"].description, PRICE_BASE_LOOKUP),
+    Number(PRICE_BASE_LOOKUP),
+    {
+      address: z.string().optional().describe("Wallet 0x address or Basename (name.base.eth)"),
+      tokens: z.array(z.string()).max(MAX_EXTRA_TOKENS).optional().describe("Extra ERC-20 token addresses for the wallet balances"),
+      token: z.string().optional().describe("ERC-20 contract address to describe"),
+    },
+    { readOnlyHint: true, openWorldHint: true, title: "Base wallet, token and gas lookup" },
+    async (args: any) => {
+      const { item, error } = parseBaseLookupInput(args ?? {});
+      if (error) return text({ error }, true);
+      try {
+        const r = await baseLookup(item!, defaultRpc(ua));
+        return text(r.body, r.status >= 400);
+      } catch (e: any) {
+        return text({ error: "Base RPC providers unavailable; not charged. Retry later.", detail: String(e?.message || e).slice(0, 200) }, true);
+      }
+    },
+  );
+
+  server.paidTool(
     "verify_links",
-    `${META["/v1/verify-links"].description} Price: ${env.PRICE} USDC per call (x402, Base).`,
+    withPrice(META["/v1/verify-links"].description, env.PRICE),
     Number(env.PRICE),
     { urls: z.array(z.union([z.string(), z.object({ url: z.string(), expect: z.string().max(300).optional() })])).min(1).max(MAX_URLS).describe("URL strings, or {url, expect} objects") },
     { readOnlyHint: true, openWorldHint: true, title: "Verify links" },
@@ -76,7 +135,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "verify_citations",
-    `${META["/v1/verify-citations"].description} Price: ${"0.01"} USDC per call (x402, Base).`,
+    withPrice(META["/v1/verify-citations"].description, "0.01"),
     Number("0.01"),
     { citations: z.array(z.union([z.string().min(1).max(1000), z.object({ doi: z.string().optional(), arxiv: z.string().optional(), pmid: z.string().optional(), title: z.string().max(500).optional(), authors: z.array(z.string()).max(30).optional(), year: z.number().int().optional() })])).min(1).max(MAX_CITATIONS) },
     { readOnlyHint: true, openWorldHint: true, title: "Verify citations" },
@@ -92,7 +151,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "find_archive",
-    `${META["/v1/find-archive"].description} Price: ${"0.005"} USDC per call (x402, Base).`,
+    withPrice(META["/v1/find-archive"].description, "0.005"),
     Number("0.005"),
     { urls: z.array(z.union([z.string(), z.object({ url: z.string(), date: z.string().optional() })])).min(1).max(MAX_ARCHIVE_URLS), date: z.string().optional().describe("Default target date") },
     { readOnlyHint: true, openWorldHint: true, title: "Find archived copy" },
@@ -108,7 +167,7 @@ function createServer(env: Env) {
   );
   server.paidTool(
     "check_headers",
-    `${META["/v1/check-headers"].description} Price: ${PRICE_HEADERS} USDC per call (x402, Base).`,
+    withPrice(META["/v1/check-headers"].description, PRICE_HEADERS),
     Number(PRICE_HEADERS),
     { urls: z.array(z.union([z.string(), z.object({ url: z.string() })])).min(1).max(MAX_HEADER_URLS).describe("URLs or domains to inspect") },
     { readOnlyHint: true, openWorldHint: true, title: "Check security headers" },
@@ -126,7 +185,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "site_policies",
-    `${META["/v1/site-policies"].description} Price: ${PRICE_POLICIES} USDC per call (x402, Base).`,
+    withPrice(META["/v1/site-policies"].description, PRICE_POLICIES),
     Number(PRICE_POLICIES),
     { urls: z.array(z.union([z.string(), z.object({ url: z.string(), path: z.string().max(2000).optional() })])).min(1).max(MAX_POLICY_URLS), path: z.string().max(2000).optional().describe("Default path to test against robots.txt") },
     { readOnlyHint: true, openWorldHint: true, title: "Read site policy files" },
@@ -142,7 +201,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "email_auth",
-    `${META["/v1/email-auth"].description} Price: ${PRICE_EMAIL_AUTH} USDC per call (x402, Base).`,
+    withPrice(META["/v1/email-auth"].description, PRICE_EMAIL_AUTH),
     Number(PRICE_EMAIL_AUTH),
     { domains: z.array(z.union([z.string(), z.object({ domain: z.string() })])).min(1).max(MAX_EMAIL_DOMAINS).describe("Domains, or email addresses (only the domain is used)") },
     { readOnlyHint: true, openWorldHint: true, title: "Check email authentication" },
@@ -160,7 +219,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "injection_scan",
-    `${META["/v1/injection-scan"].description} Price: ${PRICE_INJECTION} USDC per call (x402, Base).`,
+    withPrice(META["/v1/injection-scan"].description, PRICE_INJECTION),
     Number(PRICE_INJECTION),
     { text: z.string().min(1).max(51200).describe("Text to scan (max 50 KB)") },
     { readOnlyHint: true, openWorldHint: false, title: "Scan for prompt injection" },
@@ -173,7 +232,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "wiki_summary",
-    `${META["/v1/wiki-summary"].description} Price: ${PRICE_WIKI} USDC per call (x402, Base).`,
+    withPrice(META["/v1/wiki-summary"].description, PRICE_WIKI),
     Number(PRICE_WIKI),
     { title: z.string().max(300).optional(), query: z.string().max(300).optional(), lang: z.string().max(20).optional(), items: z.array(z.union([z.string(), z.object({ title: z.string().optional(), query: z.string().optional(), lang: z.string().optional() })])).max(MAX_WIKI_ITEMS).optional() },
     { readOnlyHint: true, openWorldHint: true, title: "Wikipedia summary" },
@@ -191,7 +250,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "license_detect",
-    `${META["/v1/license-detect"].description} Price: ${PRICE_LICENSE} USDC per call (x402, Base).`,
+    withPrice(META["/v1/license-detect"].description, PRICE_LICENSE),
     Number(PRICE_LICENSE),
     { text: z.string().optional().describe("License text"), url: z.string().url().optional().describe("Public URL of a LICENSE file") },
     { readOnlyHint: true, openWorldHint: true, title: "Detect SPDX license" },
@@ -208,7 +267,7 @@ function createServer(env: Env) {
 
   server.paidTool(
     "ics_parse",
-    `${META["/v1/ics-parse"].description} Price: ${PRICE_ICS} USDC per call (x402, Base).`,
+    withPrice(META["/v1/ics-parse"].description, PRICE_ICS),
     Number(PRICE_ICS),
     { ics: z.string().optional().describe("Raw ICS text"), text: z.string().optional(), url: z.string().url().optional(), from: z.string().optional(), to: z.string().optional(), max_occurrences: z.number().int().min(1).max(MAX_OCCURRENCES).optional() },
     { readOnlyHint: true, openWorldHint: true, title: "Parse ICS calendar" },

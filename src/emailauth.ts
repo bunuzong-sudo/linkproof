@@ -257,7 +257,7 @@ export function gradeEmailAuth(i: EmailGradeIn): { grade: string; score: number;
   return { grade, score, recommendations: rec };
 }
 
-export async function checkEmailAuth(domain: string, ua: string, lookup: DnsLookup = (n, t) => defaultDnsLookup(n, t, ua)) {
+export async function checkEmailAuth(domain: string, ua: string, lookup: DnsLookup = (n, t) => defaultDnsLookup(n, t, ua), opts: { selectors?: readonly string[]; spfCap?: number } = {}) {
   const started = Date.now();
   const out: Record<string, unknown> = { domain, disclaimer: EMAIL_AUTH_DISCLAIMER };
   try {
@@ -273,13 +273,14 @@ export async function checkEmailAuth(domain: string, ua: string, lookup: DnsLook
       return out;
     }
 
-    const spfInfo = await estimateSpfLookups(domain, lookup, txt.records || []);
+    const spfInfo = await estimateSpfLookups(domain, lookup, txt.records || [], opts.spfCap ?? 12);
     const mxHosts = parseMxRecords(mx.records || []);
     const dmarcRecs = (dmarcTxt.records || []).map(parseDmarcRecord).filter((r): r is DmarcRecord => !!r);
     const dmarc = dmarcRecs[0] || null;
 
     const dkimHits: { selector: string; present: boolean; preview?: string }[] = [];
-    const selResults = await mapLimit([...COMMON_DKIM_SELECTORS], 6, async (selector) => {
+    const selectors = [...(opts.selectors ?? COMMON_DKIM_SELECTORS)];
+    const selResults = await mapLimit(selectors, 6, async (selector) => {
       const r = await lookup(`${selector}._domainkey.${domain}`, "TXT");
       const recs = (r.records || []).filter((x) => /v=DKIM1|k=rsa|p=[A-Za-z0-9+/]/i.test(x));
       if (!recs.length) return null;
@@ -329,7 +330,7 @@ export async function checkEmailAuth(domain: string, ua: string, lookup: DnsLook
       error: dmarcTxt.error,
     };
     out.dkim = {
-      selectors_checked: COMMON_DKIM_SELECTORS.length,
+      selectors_checked: selectors.length,
       found: dkimHits,
       present: dkimHits.length > 0,
     };

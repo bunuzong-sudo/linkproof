@@ -10,6 +10,18 @@ export const CATALOG: RouteMeta[] = [
     tags: ["hallucination-check", "fact-check", "citation-verification", "broken-link-checker", "ai-answer"],
     short: "Fact-check the sources in an AI answer: extract every URL, DOI, arXiv id and PubMed id, check the links, verify the citations and find archived copies of dead links, in one call",
     description: "Hallucination check / source checker for an AI answer in one call. Send the answer text (max 50,000 chars); LinkProof extracts every URL, DOI, arXiv id and PubMed id (or pass urls/citations), checks each link (live, dead/404, soft-404, parked, unreachable), verifies each citation in Crossref, arXiv or PubMed against claimed title/authors/year, and finds Wayback copies of dead links. Up to 10 links + 10 citations. Returns all_ok or problems_found plus per-item verdicts." },
+  { path: "/v1/read-page", tool: "read_page", title: "Web page to Markdown reader (HTML + PDF)",
+    tags: ["web-scraping", "html-to-markdown", "web-reader", "pdf-to-text", "content-extraction"],
+    short: "Read any web page or PDF URL as clean Markdown for LLMs: main content, title, metadata, links, plus an AI-usage hint from robots.txt and meta tags",
+    description: "Web page reader / scraper for AI agents: fetch one public URL and get clean Markdown of the main content (boilerplate, menus and scripts removed), or text from a PDF link. Returns title, description, language, author, publish date, word count, optional links, and an AI-usage hint (robots.txt AI crawler rules, Content-Signal, meta robots noai, X-Robots-Tag). Up to 100,000 chars. Failed fetches and JS-only pages are not charged." },
+  { path: "/v1/domain-report", tool: "domain_report", title: "Domain health and trust report",
+    tags: ["domain-lookup", "whois", "ssl-certificate", "dns-lookup", "phishing-check"],
+    short: "Domain report in one call: DNS, WHOIS/RDAP age and expiry, SSL certificate, HTTPS + security headers, SPF/DMARC, robots.txt; 0-100 health score",
+    description: "Domain health / trust check in one call: DNS (A, AAAA, NS, CAA, DNSSEC), WHOIS via RDAP (registration date, domain age, expiry, registrar, status), SSL/TLS certificate from Certificate Transparency logs (issuer, days left), HTTPS reachability and security headers grade, SPF / DMARC / MX / DKIM, robots.txt AI rules, security.txt and llms.txt. Returns a 0-100 health score, risk level and plain-language findings (new domain, expiring cert, no DMARC...)." },
+  { path: "/v1/base-lookup", tool: "base_lookup", title: "Base wallet, token and gas lookup",
+    tags: ["base", "wallet-balance", "erc20", "basename", "gas-price"],
+    short: "Base chain lookup: wallet ETH + token balances (USDC, WETH, cbBTC...), Basename resolve, ERC-20 token info, latest block and gas price",
+    description: "Base (chain 8453) on-chain lookup for AI agents: wallet ETH balance and ERC-20 token balances (USDC, WETH, cbBTC, USDbC, EURC, DAI, cbETH, AERO plus up to 10 custom tokens), nonce and contract check; resolve a Basename (name.base.eth) to an address and the wallet's primary Basename; ERC-20 token info (name, symbol, decimals, total supply); latest block, base fee, gas price and transfer cost estimate. Read-only public RPC data." },
   { path: "/v1/verify-links", tool: "verify_links", title: "Broken link checker",
     tags: ["broken-link-checker", "dead-link", "url-checker", "link-verification", "hallucination"],
     short: "Broken link / dead link checker: live, 404, soft-404, parked domain, redirects, title, optional expected phrase (up to 10 URLs)",
@@ -53,3 +65,9 @@ export const CATALOG: RouteMeta[] = [
 ];
 
 export const META: Record<string, RouteMeta> = Object.fromEntries(CATALOG.map((m) => [m.path, m]));
+
+/** MCP tool description: the price suffix is added only when the total stays under the CDP 500-char resource.description limit. */
+export function withPrice(description: string, price: string | number): string {
+  const s = `${description} Price: ${price} USDC per call (x402, Base).`;
+  return s.length <= 490 ? s : description;
+}
