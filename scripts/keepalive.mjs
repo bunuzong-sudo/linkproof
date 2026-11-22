@@ -5,6 +5,7 @@
 //   node scripts/keepalive.mjs              # dry run (default): shows what would be paid, spends nothing, does not read the key
 //   node scripts/keepalive.mjs --pay        # actually pay for the endpoints that are due
 //   node scripts/keepalive.mjs --all [--pay]  # treat every endpoint as due (e.g. to refresh Bazaar descriptions)
+//   node scripts/keepalive.mjs --only read-page,domain-report [--pay]  # restrict to these routes (e.g. first payment of new routes)
 //   DAYS=25 node scripts/keepalive.mjs      # "due" threshold in days since Bazaar's lastCalledAt (default 25)
 //
 // Note: the CDP facilitator rejects payments whose resource description is over 500 chars (opaque "paymentPayload is invalid"
@@ -24,11 +25,16 @@ const MAX_CALL_UNITS = 20000; // 0.02 USDC
 const DAYS = Number(process.env.DAYS || 25);
 const PAY = process.argv.includes("--pay");
 const ALL = process.argv.includes("--all");
+const onlyArg = process.argv.find((a) => a.startsWith("--only"));
+const ONLY = onlyArg ? (onlyArg.includes("=") ? onlyArg.split("=")[1] : process.argv[process.argv.indexOf(onlyArg) + 1] || "").split(",").filter(Boolean) : null;
 
 const LICENSE_TEXT = "MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.";
 const ICS = "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nUID:1@example.com\nDTSTART:20260101T100000Z\nDTEND:20260101T110000Z\nSUMMARY:Test\nEND:VEVENT\nEND:VCALENDAR";
 // Expected prices in USDC base units (6 decimals). A different live price aborts the run.
-const JOBS = [
+const ALL_JOBS = [
+  { route: "read-page", units: 2000, body: { url: "https://example.com" } },
+  { route: "domain-report", units: 3000, body: { domain: "example.com" } },
+  { route: "base-lookup", units: 1000, body: { address: "0x206c257134049b8A52Ae7aaB0bd419Da38502733" } },
   { route: "verify-answer", units: 15000, body: { text: "See https://example.com and doi 10.1038/nature14539" } },
   { route: "verify-links", units: 5000, body: { urls: ["https://example.com"] } },
   { route: "verify-citations", units: 10000, body: { citations: ["10.1038/nature14539"] } },
@@ -41,9 +47,11 @@ const JOBS = [
   { route: "license-detect", units: 3000, body: { text: LICENSE_TEXT } },
   { route: "ics-parse", units: 3000, body: { ics: ICS } },
 ];
+if (ONLY && ONLY.some((r) => !ALL_JOBS.some((j) => j.route === r))) { console.error("ABORT: unknown route in --only", ONLY.join(",")); process.exit(2); }
+const JOBS = ONLY ? ALL_JOBS.filter((j) => ONLY.includes(j.route)) : ALL_JOBS;
 
 async function bazaarLastCalled() {
-  // Bazaar search returns at most 20 items; LinkProof has ~14 (11 canonical + 3 legacy-host duplicates).
+  // Bazaar search returns at most 20 items; LinkProof has ~17 (14 canonical + 3 legacy-host duplicates). Unlisted = due.
   const r = await fetch("https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?query=linkproof&limit=20");
   if (!r.ok) throw new Error(`Bazaar search HTTP ${r.status}`);
   const d = await r.json();

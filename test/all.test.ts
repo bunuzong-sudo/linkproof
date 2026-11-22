@@ -470,7 +470,7 @@ describe("ICS parsing", () => {
 });
 
 import { extractFromText, parseAnswerInput, MAX_ANSWER_CHARS } from "../src/answer";
-import { CATALOG } from "../src/catalog";
+import { CATALOG, withPrice } from "../src/catalog";
 
 describe("verify-answer extraction", () => {
   it("pulls URLs, DOIs, arXiv ids and PMIDs out of markdown", () => {
@@ -507,12 +507,158 @@ describe("verify-answer extraction", () => {
 });
 
 describe("catalog metadata", () => {
-  it("covers 11 unique routes with at most 5 tags and non-trivial descriptions", () => {
-    assert.equal(CATALOG.length, 11);
-    assert.equal(new Set(CATALOG.map((m) => m.path)).size, 11);
+  it("covers 14 unique routes with at most 5 tags and non-trivial descriptions", () => {
+    assert.equal(CATALOG.length, 14);
+    assert.equal(new Set(CATALOG.map((m) => m.path)).size, 14);
+    assert.equal(new Set(CATALOG.map((m) => m.tool)).size, 14);
     for (const m of CATALOG) {
       assert.ok(m.tags.length >= 3 && m.tags.length <= 5, m.path);
       assert.ok(m.description.length > 120 && m.description.length <= 480, `${m.path} description ${m.description.length} chars (CDP limit 500)`);
+      assert.ok(withPrice(m.description, "0.015").length <= 490, `${m.path} MCP description too long`);
     }
+  });
+});
+
+import { parseReadPageInput, htmlToMarkdown, extractMeta, decodeEntities, buildAiUsage, parseContentSignal, stripBoilerplateElements, MAX_CHARS_LIMIT } from "../src/readpage";
+import { parseDomainReportInput, shapeRdap, shapeCerts } from "../src/domainreport";
+import { parseBaseLookupInput, normalizeBasename, baseLookup, KNOWN_TOKENS, type RpcFn } from "../src/baselookup";
+import { parseAbi, decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
+const MC_ABI = parseAbi(["struct Call3 { address target; bool allowFailure; bytes callData; }", "struct Result { bool success; bytes returnData; }", "function aggregate3(Call3[] calls) payable returns (Result[] returnData)"]);
+
+describe("read-page", () => {
+  it("validates input", () => {
+    assert.ok(parseReadPageInput({}).error);
+    assert.ok(parseReadPageInput({ url: "http://127.0.0.1/" }).error);
+    assert.ok(parseReadPageInput({ url: "https://example.com", max_chars: 10 }).error);
+    assert.ok(parseReadPageInput({ url: "https://example.com", max_chars: MAX_CHARS_LIMIT + 1 }).error);
+    assert.ok(parseReadPageInput({ url: "https://example.com", include_links: "yes" }).error);
+    const ok = parseReadPageInput({ url: "example.com" });
+    assert.equal(ok.item!.url, "https://example.com/");
+    assert.equal(ok.item!.ai_policy, true);
+    assert.equal(parseReadPageInput({ urls: ["https://a.example/x"] }).item!.url, "https://a.example/x");
+  });
+  it("converts HTML to Markdown and drops boilerplate", () => {
+    const html = `<html lang="en"><head><title>T &amp; Co</title><meta name="description" content="Desc"><script>var x=1</script></head><body>
+      <nav class="site-nav"><a href="/home">Home</a></nav>
+      <div class="cookie-banner">We use cookies</div>
+      <main><h1>Hello</h1><p>First <b>bold</b> para with <a href="/rel">a link</a>.</p>
+      <ul><li>one</li><li>two<ul><li>nested</li></ul></li></ul><ol><li>a</li><li>b</li></ol>
+      <pre><code>const x = 1;\nconst y = 2;</code></pre><blockquote><p>quoted</p></blockquote>
+      <table><tr><th>K</th><th>V</th></tr><tr><td>a</td><td>1</td></tr></table>
+      <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p></main>
+      <footer>Footer stuff</footer></body></html>`;
+    const r = htmlToMarkdown(html, "https://ex.com/a/b");
+    assert.equal(r.region, "main");
+    assert.match(r.markdown, /^# Hello/m);
+    assert.match(r.markdown, /\*\*bold\*\*/);
+    assert.match(r.markdown, /\[a link\]\(https:\/\/ex\.com\/rel\)/);
+    assert.match(r.markdown, /^- one$/m);
+    assert.match(r.markdown, /^  - nested$/m);
+    assert.match(r.markdown, /^2\. b$/m);
+    assert.match(r.markdown, /```\nconst x = 1;/);
+    assert.match(r.markdown, /^> quoted$/m);
+    assert.match(r.markdown, /\| K \| V \|\n\| --- \| --- \|/);
+    assert.doesNotMatch(r.markdown, /cookies|Footer|var x|Home/);
+    const meta = extractMeta(html);
+    assert.equal(meta.title, "T & Co");
+    assert.equal(meta.description, "Desc");
+    assert.equal(meta.lang, "en");
+  });
+  it("removes nested boilerplate elements in a balanced way", () => {
+    const out = stripBoilerplateElements(`<p>keep</p><div class="sidebar"><div><div>x</div></div>y</div><p>also</p>`);
+    assert.equal(out.replace(/\s+/g, ""), "<p>keep</p><p>also</p>");
+  });
+  it("decodes entities", () => {
+    assert.equal(decodeEntities("a&nbsp;b &#x41;&#66; &mdash; &bogus;"), "a b AB — &bogus;");
+  });
+  it("builds the AI-usage hint", () => {
+    const robots = "User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /\nContent-Signal: search=yes, ai-train=no\n";
+    assert.deepEqual(parseContentSignal(robots), { search: "yes", "ai-train": "no" });
+    const u = buildAiUsage({ present: true, status: 200, text: robots }, "/x", null, null);
+    assert.equal(u.verdict, "restricted");
+    assert.ok(u.robots_txt.ai_crawlers_blocked.includes("GPTBot"));
+    assert.ok(u.signals.some((s) => /ai-train=no/.test(s)));
+    assert.equal(buildAiUsage({ present: true, status: 200, text: "User-agent: *\nDisallow:\n" }, "/", null, null).verdict, "allowed");
+    assert.equal(buildAiUsage({ present: false, status: 404, text: "" }, "/", null, null).verdict, "unknown");
+    assert.equal(buildAiUsage({ present: false, status: 404, text: "" }, "/", "noai, noimageai", null).verdict, "restricted");
+  });
+});
+
+describe("domain-report", () => {
+  it("validates input", () => {
+    assert.ok(parseDomainReportInput({}).error);
+    assert.ok(parseDomainReportInput({ domain: "localhost" }).error);
+    assert.equal(parseDomainReportInput({ domain: "https://WWW.Example.com/path" }).item!.domain, "www.example.com");
+    assert.equal(parseDomainReportInput({ url: "me@example.org" }).item!.domain, "example.org");
+  });
+  it("shapes RDAP", () => {
+    const now = Date.parse("2026-01-01T00:00:00Z");
+    const r = shapeRdap({ ldhName: "EXAMPLE.COM", status: ["active"], events: [{ eventAction: "registration", eventDate: "2025-12-01T00:00:00Z" }, { eventAction: "expiration", eventDate: "2026-01-21T00:00:00Z" }],
+      entities: [{ roles: ["registrar"], vcardArray: ["vcard", [["fn", {}, "text", "Reg Inc"]]], publicIds: [{ type: "IANA Registrar ID", identifier: "9" }] }], nameservers: [{ ldhName: "NS1.EX.COM." }] }, now);
+    assert.equal(r.age_days, 31);
+    assert.equal(r.expires_in_days, 20);
+    assert.equal(r.registrar, "Reg Inc");
+    assert.equal(r.registrar_iana_id, "9");
+    assert.deepEqual(r.nameservers, ["ns1.ex.com"]);
+  });
+  it("shapes CT certificates for the exact host (wildcards one level)", () => {
+    const now = Date.parse("2026-01-01T00:00:00Z");
+    const list = [
+      { dns_names: ["*.ex.com"], issuer: { friendly_name: "LE" }, not_before: "2025-12-01T00:00:00Z", not_after: "2026-01-11T00:00:00Z", revoked: false },
+      { dns_names: ["other.com"], issuer: { friendly_name: "X" }, not_before: "2025-12-20T00:00:00Z", not_after: "2026-06-01T00:00:00Z", revoked: false },
+      { dns_names: ["www.ex.com"], issuer: { friendly_name: "R" }, not_before: "2025-12-10T00:00:00Z", not_after: "2026-02-01T00:00:00Z", revoked: true },
+    ];
+    const c = shapeCerts(list, "www.ex.com", now);
+    assert.equal(c.unexpired_count, 1);
+    assert.equal(c.latest!.issuer, "LE");
+    assert.equal(c.latest!.days_left, 10);
+    assert.equal(shapeCerts(list, "a.b.ex.com", now).found, false);
+  });
+});
+
+describe("base-lookup", () => {
+  it("validates input", () => {
+    assert.deepEqual(parseBaseLookupInput({}).item, { tokens: [] });
+    assert.deepEqual(parseBaseLookupInput(null).item, { tokens: [] });
+    assert.ok(parseBaseLookupInput({ address: "vitalik.eth" }).error);
+    assert.ok(parseBaseLookupInput({ address: "0x123" }).error);
+    assert.ok(parseBaseLookupInput({ tokens: ["0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"] }).error);
+    assert.ok(parseBaseLookupInput({ token: "nope" }).error);
+    assert.equal(parseBaseLookupInput({ address: "Jesse.Base" }).item!.basename, "jesse.base.eth");
+    assert.equal(parseBaseLookupInput({ address: "0x206c257134049b8a52ae7aab0bd419da38502733" }).item!.address, "0x206c257134049b8A52Ae7aaB0bd419Da38502733");
+    const t = parseBaseLookupInput({ address: "0x206c257134049b8a52ae7aab0bd419da38502733", tokens: ["0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed"] }).item!;
+    assert.deepEqual(t.tokens, ["0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed"]);
+    assert.equal(normalizeBasename("a.eth"), null);
+  });
+  it("reads chain status and wallet balances from a batched RPC", async () => {
+    const pad = (n: bigint) => "0x" + n.toString(16).padStart(64, "0");
+    const rpc: RpcFn = async (reqs) => ({ provider: "mock", results: reqs.map((q) => {
+      if (q.method === "eth_chainId") return "0x2105";
+      if (q.method === "eth_getBlockByNumber") return { number: "0x10", timestamp: "0x" + Math.floor(Date.now() / 1000).toString(16), baseFeePerGas: "0x3b9aca00", gasUsed: "0x5", gasLimit: "0xa" };
+      if (q.method === "eth_gasPrice") return "0x77359400";
+      if (q.method === "eth_maxPriorityFeePerGas") return "0x0";
+      if (q.method === "eth_getBalance") return "0xde0b6b3a7640000";
+      if (q.method === "eth_getTransactionCount") return "0x3";
+      if (q.method === "eth_getCode") return "0x";
+      if (q.method === "eth_call") {
+        const d = (q.params[0] as any).data as Hex;
+        const inner = (decodeFunctionData({ abi: MC_ABI, data: d }).args![0] as any[]);
+        return encodeFunctionResult({ abi: MC_ABI, functionName: "aggregate3", result: inner.map((c: any) => ({ success: true, returnData: c.callData.startsWith("0x70a08231") ? pad(1500000n) : pad(0n) })) });
+      }
+      return null;
+    }) });
+    const r = await baseLookup({ address: "0x206c257134049b8A52Ae7aaB0bd419Da38502733", tokens: [] }, rpc);
+    assert.equal(r.status, 200);
+    const b: any = r.body;
+    assert.equal(b.chain.block_number, 16);
+    assert.equal(b.chain.base_fee_gwei, 1);
+    assert.equal(b.chain.gas_price_gwei, 2);
+    assert.equal(b.chain.block_gas_used_pct, 50);
+    assert.equal(b.wallet.eth, "1");
+    assert.equal(b.wallet.tx_count, 3);
+    assert.equal(b.wallet.is_contract, false);
+    assert.equal(b.wallet.primary_basename, null);
+    assert.equal(b.wallet.tokens.length, KNOWN_TOKENS.length);
+    assert.equal(b.wallet.tokens.find((t: any) => t.symbol === "USDC").balance, "1.5");
   });
 });
