@@ -1,3 +1,4 @@
+// Bazaar/CDP facilitator rejects payments whose resource description exceeds 500 characters: keep every description <= 480.
 // Single source for the public wording of each paid route: Bazaar description + tags (Bazaar keeps the first 5 tags),
 // docs, OpenAPI summaries, MCP tool text and llms.txt. Wording leads with the phrases agents search for.
 export const CANONICAL_URL = "https://linkproof.zopip.com";
@@ -8,7 +9,7 @@ export const CATALOG: RouteMeta[] = [
   { path: "/v1/verify-answer", tool: "verify_answer", title: "Fact-check an AI answer's sources",
     tags: ["hallucination-check", "fact-check", "citation-verification", "broken-link-checker", "ai-answer"],
     short: "Fact-check the sources in an AI answer: extract every URL, DOI, arXiv id and PubMed id, check the links, verify the citations and find archived copies of dead links, in one call",
-    description: "Hallucination check / source checker for an AI-generated answer in one call. Send the answer text (up to 50,000 chars) and LinkProof extracts every URL, DOI, arXiv id and PubMed id (or pass urls/citations explicitly), then: checks each link (live, dead/404, soft-404, parked domain, unreachable, final URL, title), verifies each citation exists in Crossref/DataCite, arXiv or PubMed and matches claimed title/authors/year, and finds Wayback Machine archived copies for dead links. Up to 10 links and 10 citations per call. Returns one summary (all_ok or problems_found) plus per-item verdicts." },
+    description: "Hallucination check / source checker for an AI answer in one call. Send the answer text (max 50,000 chars); LinkProof extracts every URL, DOI, arXiv id and PubMed id (or pass urls/citations), checks each link (live, dead/404, soft-404, parked, unreachable), verifies each citation in Crossref, arXiv or PubMed against claimed title/authors/year, and finds Wayback copies of dead links. Up to 10 links + 10 citations. Returns all_ok or problems_found plus per-item verdicts." },
   { path: "/v1/verify-links", tool: "verify_links", title: "Broken link checker",
     tags: ["broken-link-checker", "dead-link", "url-checker", "link-verification", "hallucination"],
     short: "Broken link / dead link checker: live, 404, soft-404, parked domain, redirects, title, optional expected phrase (up to 10 URLs)",
@@ -24,7 +25,7 @@ export const CATALOG: RouteMeta[] = [
   { path: "/v1/check-headers", tool: "check_headers", title: "Security headers audit",
     tags: ["security-headers", "hsts", "csp", "website-security", "audit"],
     short: "HTTP security headers audit: HSTS, CSP, X-Frame-Options, nosniff, Referrer-Policy, cookie flags, HTTPS redirect, A-F grade (up to 5 URLs)",
-    description: "HTTP security headers audit / scanner for up to 5 URLs or domains: checks Strict-Transport-Security (HSTS), Content-Security-Policy (CSP), X-Frame-Options / frame-ancestors (clickjacking), X-Content-Type-Options (nosniff), Referrer-Policy, Permissions-Policy, COOP/CORP, Set-Cookie flags (Secure, HttpOnly, SameSite; cookie names only, never values), HTTP-to-HTTPS redirect and server version disclosure. Returns an A-F grade, score and fix recommendations. Headers only (HEAD, small GET fallback); no TLS certificate check." },
+    description: "HTTP security headers audit / scanner for up to 5 URLs or domains: HSTS, Content-Security-Policy (CSP), X-Frame-Options / frame-ancestors (clickjacking), X-Content-Type-Options (nosniff), Referrer-Policy, Permissions-Policy, COOP/CORP, cookie flags (Secure, HttpOnly, SameSite; names only), HTTPS redirect and server version disclosure. Returns an A-F grade, score and fixes. Headers only; no TLS certificate check." },
   { path: "/v1/site-policies", tool: "site_policies", title: "robots.txt, llms.txt and security.txt checker",
     tags: ["robots-txt", "llms-txt", "ai-crawler", "security-txt", "seo"],
     short: "robots.txt + llms.txt + ai.txt + security.txt checker: AI crawler rules (GPTBot, ClaudeBot, ...), path allowed?, sitemaps (up to 5 sites)",
@@ -32,11 +33,11 @@ export const CATALOG: RouteMeta[] = [
   { path: "/v1/email-auth", tool: "email_auth", title: "SPF / DKIM / DMARC checker",
     tags: ["spf", "dmarc", "dkim", "email-security", "dns-lookup"],
     short: "SPF, DKIM and DMARC checker + MX lookup for up to 5 domains: misconfigurations, grade, fixes (DNS only, mailboxes never probed)",
-    description: "SPF, DKIM and DMARC checker (email authentication / domain email security audit) for up to 5 domains: reads SPF, DMARC, MX and common DKIM selectors via DNS-over-HTTPS (Cloudflare, Google fallback). Reports presence, policy strength, common misconfigurations (multiple SPF records, more than 10 SPF DNS lookups, +all or missing all, missing or multiple DMARC, DMARC p=none), a simple A-F grade and recommendations. DNS check only: mailboxes are never probed and it is not a deliverability guarantee." },
+    description: "SPF, DKIM and DMARC checker (email authentication audit) for up to 5 domains: reads SPF, DMARC, MX and common DKIM selectors via DNS-over-HTTPS (Cloudflare, Google fallback). Reports presence, policy strength, common misconfigurations (multiple SPF records, more than 10 SPF DNS lookups, +all or missing all, missing or multiple DMARC, DMARC p=none), a simple A-F grade and recommendations. DNS check only: mailboxes are never probed and it is not a deliverability guarantee." },
   { path: "/v1/injection-scan", tool: "injection_scan", title: "Prompt injection detection",
     tags: ["prompt-injection", "llm-security", "jailbreak-detection", "ai-safety", "sanitization"],
     short: "Prompt injection detection for untrusted text (web pages, emails, tool output): risk level, matches, sanitized copy (max 50 KB)",
-    description: "Prompt injection detection / scanner for untrusted text before an LLM agent reads it (web pages, emails, documents, tool output). Rule-based scan of up to 50 KB for instruction overrides (\"ignore previous instructions\"), system-prompt reveal requests, DAN-style role hijack and \"disable safety\" jailbreak phrasing, hidden or bidi unicode, base64 payloads that decode to instructions, and tool/webhook/markdown-image exfiltration. Returns a risk level (none, low, medium, high, critical), matches with offsets and a sanitized copy wrapped as untrusted content. Heuristic only; text is not stored." },
+    description: "Prompt injection detection / scanner for untrusted text before an LLM agent reads it (web pages, emails, documents, tool output). Rule-based scan of up to 50 KB for instruction-override phrases, system-prompt reveal requests, DAN-style jailbreaks, hidden or bidi unicode, base64-encoded instructions and tool/markdown-image exfiltration. Returns risk (none to critical), matches with offsets and a sanitized copy. Heuristic; text not stored." },
   { path: "/v1/wiki-summary", tool: "wiki_summary", title: "Wikipedia summary",
     tags: ["wikipedia", "summary", "knowledge", "wikidata", "research"],
     short: "Wikipedia summary lookup by title or search query (any language): extract, URL, thumbnail, Wikidata id, CC BY-SA attribution (up to 3)",

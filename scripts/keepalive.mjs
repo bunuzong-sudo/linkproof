@@ -7,6 +7,8 @@
 //   node scripts/keepalive.mjs --all [--pay]  # treat every endpoint as due (e.g. to refresh Bazaar descriptions)
 //   DAYS=25 node scripts/keepalive.mjs      # "due" threshold in days since Bazaar's lastCalledAt (default 25)
 //
+// Note: the CDP facilitator rejects payments whose resource description is over 500 chars (opaque "paymentPayload is invalid"
+// error); run scripts/diag-ephemeral.mjs (empty wallet, never spends) to check all routes before paying.
 // Safety: total per run is capped at 0.1 USDC; each call must match the expected price, network (Base),
 // asset (USDC) and payTo (our seller wallet) from the live 402 challenge, or the run aborts. Never prints keys.
 import fs from "fs";
@@ -106,10 +108,16 @@ for (const job of due) {
   const url = await challenge(job);
   if (spent + job.units > MAX_TOTAL_UNITS) { console.error("ABORT: cap reached"); break; }
   const res = await pay(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(job.body) });
-  await res.text();
+  const bodyText = await res.text();
   const h = res.headers.get("payment-response") || res.headers.get("x-payment-response");
   let tx = null; try { const d = h ? decodePaymentResponseHeader(h) : null; tx = d?.transaction || d?.txHash || null; } catch {}
   const rec = { at: new Date().toISOString(), route: job.route, usdc: job.units / 1e6, status: res.status, tx, self_payment: true };
+  if (res.status < 200 || res.status >= 300) {
+    // Keep the server's reason (e.g. facilitator rejection) so failures can be diagnosed.
+    let reason = null; try { const prh = res.headers.get("payment-required"); reason = prh ? JSON.parse(Buffer.from(prh, "base64").toString()).error : null; } catch {}
+    rec.error = reason; rec.body = bodyText.slice(0, 2000);
+    console.error(`server said (${res.status}): ${reason ?? ""} ${bodyText.slice(0, 2000)}`);
+  }
   fs.appendFileSync(LOG, JSON.stringify(rec) + "\n");
   console.log("paid", JSON.stringify(rec));
   if (res.status < 200 || res.status >= 300) { console.error("ABORT: non-2xx; stopping so nothing is paid twice"); process.exit(4); }

@@ -512,7 +512,7 @@ describe("catalog metadata", () => {
     assert.equal(new Set(CATALOG.map((m) => m.path)).size, 11);
     for (const m of CATALOG) {
       assert.ok(m.tags.length >= 3 && m.tags.length <= 5, m.path);
-      assert.ok(m.description.length > 120 && m.description.length < 1000, m.path);
+      assert.ok(m.description.length > 120 && m.description.length <= 480, `${m.path} description ${m.description.length} chars (CDP limit 500)`);
     }
   });
 });
