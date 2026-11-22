@@ -2,7 +2,7 @@ export const MAX_URLS = 10;
 const MAX_BYTES = 64 * 1024;
 const MAX_BYTES_EXPECT = 256 * 1024;
 const TIMEOUT_MS = 8000;
-const UA = "LinkProof/1.0 (+https://linkproof.bsptimber.workers.dev; URL verification for AI agents)";
+const UA = "LinkProof/1.1 (+https://linkproof.zopip.com; URL verification for AI agents)";
 
 const SOFT404 = [
   /page (was )?not found/i, /\b404\b[^<]{0,40}(error|not found)/i, /(doesn'?t|does not|no longer) exist/i,
