@@ -13,3 +13,7 @@ PAY_TO = "0xYourReceivingWallet"
 PRICE = "0.005"
 CONTACT_EMAIL = "you@example.com"
 PUBLIC_URL = "http://localhost:8787"
+
+# Workers AI binding: used only by read-page to convert PDFs to Markdown (toMarkdown is free for PDFs).
+[ai]
+binding = "AI"
