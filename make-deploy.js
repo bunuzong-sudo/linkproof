@@ -9,14 +9,18 @@ const workerName = mode === "mainnet" ? "linkproof" : "linkproof-testnet";
 const canonical = mode === "mainnet" ? "https://linkproof.zopip.com" : `https://${workerName}.bsptimber.workers.dev`;
 const vars = { ...cfg, PAY_TO: "0x80042a9F07df4373Fa72A798C9764Aea7863c2ec", PRICE: "0.005", CONTACT_EMAIL: "bunuzong@gmail.com", PUBLIC_URL: canonical,
   // Public Glama connector ownership token (not a secret; served at /.well-known/glama.json and /mcp/.well-known/glama.json).
-  GLAMA_CLAIM: "glama_claim_UyVGET-Y5waq9Gw0R3fdC0Q8ED7wlCvL" };
+  GLAMA_CLAIM: "glama_claim_UyVGET-Y5waq9Gw0R3fdC0Q8ED7wlCvL",
+  // Testnet only: lets requests with header x-test-free: 1 skip payment so new routes can be tested without test USDC.
+  // The worker also requires NETWORK === Base Sepolia, so this can never apply on mainnet.
+  ...(mode === "testnet" ? { TEST_FREE: "1" } : {}) };
+if (mode === "mainnet" && vars.TEST_FREE) throw new Error("TEST_FREE must never be set on mainnet");
 const code = fs.readFileSync(__dirname + "/dist/worker.js", "utf8");
 const out = `async () => {
   const name = ${JSON.stringify(workerName)};
   const code = ${JSON.stringify(code)};
   const vars = ${JSON.stringify(vars)};
   const metadata = { keep_bindings: ["secret_text"], main_module: "worker.js", compatibility_date: "2026-10-01", compatibility_flags: ["nodejs_compat"],
-    bindings: Object.entries(vars).map(([name, text]) => ({ type: "plain_text", name, text })) };
+    bindings: [...Object.entries(vars).map(([name, text]) => ({ type: "plain_text", name, text })), { type: "ai", name: "AI" }] }; // AI: Workers AI toMarkdown for PDFs
   const form = new FormData();
   form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
   form.append("worker.js", new Blob([code], { type: "application/javascript+module" }), "worker.js");
