@@ -6,7 +6,10 @@ const cfg = {
   mainnet: { NETWORK: "eip155:8453", FACILITATOR_URL: "cdp" }, // CDP facilitator; needs Worker secrets CDP_API_KEY_ID / CDP_API_KEY_SECRET
 }[mode];
 const workerName = mode === "mainnet" ? "linkproof" : "linkproof-testnet";
-const vars = { ...cfg, PAY_TO: "0x80042a9F07df4373Fa72A798C9764Aea7863c2ec", PRICE: "0.005", CONTACT_EMAIL: "bunuzong@gmail.com", PUBLIC_URL: `https://${workerName}.bsptimber.workers.dev` };
+const canonical = mode === "mainnet" ? "https://linkproof.zopip.com" : `https://${workerName}.bsptimber.workers.dev`;
+const vars = { ...cfg, PAY_TO: "0x80042a9F07df4373Fa72A798C9764Aea7863c2ec", PRICE: "0.005", CONTACT_EMAIL: "bunuzong@gmail.com", PUBLIC_URL: canonical,
+  // Public Glama connector ownership token (not a secret; served at /.well-known/glama.json and /mcp/.well-known/glama.json).
+  GLAMA_CLAIM: "glama_claim_UyVGET-Y5waq9Gw0R3fdC0Q8ED7wlCvL" };
 const code = fs.readFileSync(__dirname + "/dist/worker.js", "utf8");
 const out = `async () => {
   const name = ${JSON.stringify(workerName)};
